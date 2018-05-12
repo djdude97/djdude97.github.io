@@ -1,0 +1,368 @@
+---
+title: "UMN Seasonal Crime Rates CMSC320 Final Project"
+author: "Andrew Jordan"
+date: "May 3, 2018"
+output: html_document
+---
+
+#Introduction:
+
+This is a tutorial to teach the entire process of data science and how data curation, analysis, machine learning, and hypothesis testing can be used in any field of study. Data science is a mix between hacking skills, math and statistics knowledge, and substantive expertise. The specific field of study I chose to show this pipeline is Minneapolis Incidents & Crime. This shows public-facing service requests taken through the Lagan CRM system, and police incidents in Minneapolis Minnesota respectively. The reason I chose to use this topic is because I will be living in Minneapolis this summer for 10 weeks for my summer internship, so I figured it was a good idea to prove with data science that it's a safe place to live during the summer. 
+
+#Data Curation, Parsing, and Management; 
+
+Setup for the R Markdown file.
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Importing the libraries we will use for this tutorial. 
+
+```{r libraries}
+library(tidyverse)
+library(lubridate) 
+library(ggplot2)
+library(dplyr)
+library(leaflet)
+library(viridis)
+library(ISLR)
+library(tree)
+```
+
+Initializing the datasets. They can be found online at: https://www.kaggle.com/mrisdal/minneapolis-incidents-crime
+
+```{r datasetup}
+crimes <- read_csv("crimes.csv")
+incidents <- read_csv("incidents.csv")
+```
+
+Let's take a look at the two datasets.
+
+```{r dataframes}
+#police incidents in Minneapolis, Minnesota from 2010 to 2016
+head(crimes)
+#public-facing service requests that were taken by 311 contact center agents, or through online and mobile applications, and entered the Lagan CRM system from 2011 to 2015
+head(incidents)
+```
+
+Let's take a deeper look into the crime table as I'll be focusing my efforts on that one. R simply opened up the csv (comma separated value) file with the function read_csv and then displayed the first 6 rows of the table in an elegant fashion. It displays different types of data like publicaddress, Time, and Offense which are attributes heading each columns of data for a particular crime which is said to be an entity. 
+
+One thing I want for my experiment is to know just the year and month of the crime since I'm considering yearly trends and seasonal safety specifically during the summer months. So I am going to tidy up the data and alter the data frame by adding columns that represents year and month of the crime as well as hour from ReportedDate attribute.
+
+```{r tidy year}
+#adding a new column and using format to extract the year and month of the crime
+crimes$year_month <- format(as.Date(crimes$ReportedDate), "%Y-%m")
+crimes$year <- format(as.Date(crimes$ReportedDate), "%Y")
+crimes$month <- format(as.Date(crimes$ReportedDate), "%m")
+crimes$hour <- factor(substr(crimes$Time, 1, 2))
+#notice the new year and month columns at the end
+head(crimes)
+crimes
+```
+
+We can also use the previously imported library leaflet to create an interactive map of Minneapolis. 
+
+```{r map}
+#here is a basic interactive map of the city
+min_map <- leaflet(crimes) %>%
+  addTiles() %>%
+  setView(lat = 44.9778, lng = -93.2650, zoom = 11)
+min_map
+
+#now we can add circle markers for each crime
+map_circle <- leaflet(crimes) %>%
+  addTiles() %>%
+  setView(lat = 44.9778, lng = -93.2650, zoom = 11) %>%
+  addCircleMarkers(data = crimes, lng = ~ Long, lat = ~ Lat, radius = 2, clusterOptions = markerClusterOptions()) 
+map_circle
+
+#creating a dataframe for number of crimes for each neighborhood with the average longitude and latitude
+crimes_num <- crimes %>%
+  group_by(Neighborhood) %>%
+  summarize(num_crimes = n(), Long = mean(Long), Lat = mean(Lat))
+crimes_num
+
+#color function to show severity of total crime count
+getColor <- function(crime) {
+  sapply(crime$num_crimes, function(num_crimes) {
+  if(num_crimes <= 1000) {
+    "green"
+  } else if(num_crimes <= 5000) {
+    "orange"
+  } else {
+    "red"
+  } })
+}
+
+#function to create cool looking icons
+icons <- awesomeIcons(
+  icon = 'ios-close',
+  iconColor = 'black',
+  library = 'ion',
+  markerColor = getColor(crimes_num)
+)
+
+#finally let's show the total number of crimes for each neighborhood with markers for each neighborhood
+map_avg <- leaflet(crimes_num) %>%
+  addTiles() %>%
+  setView(lat = 44.9778, lng = -93.2650, zoom = 11) %>%
+  addAwesomeMarkers(~Long, ~Lat, icon = icons, label = ~as.character(num_crimes))
+#green markers are safe, orange are dangerous, and red are seriously dangerous (downtown)
+map_avg
+```
+
+
+#Exploratory Data Analysis; 
+
+Now let's analyze the data with a graph. There are three steps to this:
+1) The data that goes into the plot, which in this case is our crime data frame of entities and attributes. 
+2) The mapping between the attributes and the aesthetic graphical qualities. 
+3) The geometric display of these qualities in terms of the graph.
+
+I will use some simple R code that takes care of each of these steps. 
+
+```{r basic plot}
+#new crime plot plot object, this is the data from 1)
+  crime_plot <- crimes %>%
+  #filtering to get more recent data
+  filter(year > 2011) %>%
+  #grouping by year and month to see trends
+  group_by(year_month) %>%
+  #creating a new temporary variable for the y axis
+  summarize(num_crimes = n()) %>%
+  #to get rid of one outlier and tidy up the graph
+  filter(num_crimes > 1000) %>%
+  #this is the mapping from 2)
+  ggplot(aes(x = year_month, y = num_crimes)) +
+    #this is the geometric display from 3) and all the optional aesthetics to make it presentable
+    geom_point() +
+    xlab("Year-Month") +
+    ylab("Number of Crimes") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    ggtitle("Number of Crimes Each Year") 
+crime_plot
+```
+Fairly successful plot to get us started. I start by filtering the year to look at 2012 and beyond. I then group by the year and month to collect counts for each month of crimes. I then make a new temporary attribute for the y axis and filter out the one outlier month since it made the graph overly tall. I then plot the data with a scatterplot and tidy it up with titles and making the x axis labels sideways so they're less ugly. 
+
+Next, I want to limit the Neighborhood to University of Minnesota since that's where I will be living. I will also group by month to make things more clear using my new year attribute. 
+
+```{r basic plot 2}
+  crime_plot <- crimes %>%
+  filter(year > 2011) %>%
+  #limiting to crimes that happen at UMN
+  filter(Neighborhood == "UNIVERSITY OF MINNESOTA") %>%
+  group_by(month) %>%
+  summarize(num_crimes = n()) %>%
+  ggplot(aes(x = month, y = num_crimes)) +
+    geom_point() +
+    xlab("Month") +
+    ylab("Number of Crimes") +
+    ggtitle("number of Crimes Each Year and Month for University of Minnesota")  
+crime_plot
+```
+
+Important things to pay attention to with graph for exploratory data analysis are central trends, spread, skew, and outliers. Let's classify each, 
+
+Central trends: The graph centers around about 35 crimes. This can be thought of as the mean or average.
+Spread: This can be thought of the variance of the data which is pretty high, having some at about 20 and some as high as 50.
+Skew: It is positively skewed meaning the right half of the data after June is higher.
+Outliers: In the first graph, I got rid of an outlier but in the second I would say there's an outlier in December probably because of the cold weather. 
+
+Using the method summary, we can backup my visual observations with a statistics markdown of the exploratory data analysis. 
+
+```{r basic summary}
+crimes_sum <- summary(
+    crimes %>%
+    filter(year > 2011) %>%
+    filter(Neighborhood == "UNIVERSITY OF MINNESOTA") %>%
+    group_by(month) %>%
+    summarize(num_crimes = n()) 
+  )
+crimes_sum
+```
+
+#Hypothesis Testing;
+
+We can use a basic inference method called the inverse problem. Essentially we have a population of all the crimes in Minneapolis. We want to make a probabilistic model to generate data. Our inverse problem is inferring the parameter of Minneapolis being safe compared to America overall. Also showing that the three summer months are safer. 
+
+Hypothesis testing is a statistics method that tests a scientific hypothesis against a population normal. I got data from nationmaster.com and it shows that there are 41.29 crimes per 1000 people in the United States in 2002. We are going to test this against our sample of data from Minneapolis. Our hypotheses are,
+
+(null), 
+\[
+H_0: p \leq \frac{41.29}{1000} = 0.04129
+\]
+(alternative), 
+\[
+H_1: p > 0.04129
+\]
+
+Next we need to calculate the average number of crimes in Minneapolis for each year relative to the population that I got from Google which is 413,651 people in 2016. 
+
+```{r hypothesis testing}
+population <- 413651
+crimes_avg <- crimes %>%
+  group_by(year) %>%
+  summarize(num_crimes = n())
+#num_crimes being the number of crimes for each year from our data
+crimes_avg
+#average number of crimes each year
+average <- mean(crimes_avg$num_crimes)
+average
+```
+
+We assume that our null hypothesis is true unless there is compelling evidence to reject it. The event is statistically significant if it has 5% or less probability of happening. Here, this 5% is called the significance level of the test, denoted alpha, alpha = 0.05.
+
+```{r hypothesis testing part 2}
+#expected crime rate from our sample with the given population in Minneapolis 
+expect <- average / population
+expect
+```
+
+Now that we have a phat which is our proposed p (expect), we can create a confidence interval to see if we can reject the null hypothesis or not. 
+
+```{r hypothesis testing part 3}
+#estimate for our proposed phat
+get_estimate <- function(n, p = 0.041) mean(sample(c(0 , 1), size = n, replace = TRUE, prob = c( 1 - p, p)))
+#new data frame for our confidence interval and hypothesis testing
+tab <- data.frame(sample_size = c(population)) %>%
+  #column for phat which is our proposed p estimate
+  mutate(phat = sapply(sample_size, get_estimate)) %>%
+  #standard error for our estimate
+  mutate(se = sqrt(expect * (1 - expect)) / sqrt(population)) %>%
+  #the lower left tail of our graph
+  mutate(lower = expect + qnorm(.05 / 2, sd = se)) %>%
+  #the upper right tail of our graph
+  mutate(upper = expect + -qnorm(.05 / 2, sd = se)) %>%
+  #the p_value being the pnorm which is the z value for the normal distribution
+  mutate(p_value = 1 - pnorm(expect, mean = 0.041, sd = se))
+tab
+```
+
+Our hypothesis testing gives us a phat which again is our estimate for p and it turns out to be 0.41 which is roughly equal to our null hypothesis. Since the null is being less than or equal to 0.041, our 0.041 is within 0.05 of our null, so we definitely  can't reject our null hypothesis. 
+
+#Machine Learning to Provide Analysis; 
+
+First I am going to analyze crime over time throughout the day and see if the general number of crimes is increasing or decreasing in Minneapolis throughout the day to see when it's safest for me to be outside this summer.
+
+```{r year-month average}
+#let's average the number of crimes by each month and year similar to how we did with our graph earlier
+crimes_avg <- crimes %>%
+  group_by(Time) %>%
+  summarize(num_crimes = n()) %>%
+  #to get rid of outliers 
+  filter(num_crimes < 500)
+crimes_avg
+```
+
+We can use a machine learning process called linear regression that is strong, basic, and elegant to use when analyzing data. We can use a statistical model with our data set to predict outcomes for future crime numbers. 
+
+With the model we're trying to create, we have a continuous numerical variable of Time and a numerical variable num_crimes. We go ahead and assume that our prediction has a relationship that can be represented as a linear function like:
+
+\[
+num\_crimes = \beta_0 + \beta_1 \cdot Time
+\]
+
+We have this data for our sample, but we want to be able to predict the population which would be the city of Minneapolis since our data is a small subset with a limited Time frame. So we need to find values for beta_0 and beta_1 that minimize loss with a RSS which stands for residual sum of squares. Let us put this together with some code and plot it using a linear regression model. 
+
+```{r linear regression model}
+crimes_avg %>%
+  #basic dot plot with crimes for each month of every year
+  ggplot(aes(x = Time, y = num_crimes)) + 
+  geom_point() +
+  labs(x="Time Crime Occurs") + 
+  labs(y="Numbers of Crimes During this Time") + 
+  ggtitle("Number of Crimes for Each Unique Time of Day") +
+  #lm stands for linear model, so our method is linear regression. This is a geometric representation of what we're trying to show
+  geom_smooth(method = lm) 
+```
+
+This scatterplot shows the fluctuation and variation amongst crimes with most Times being low on crimes but some having huge spikes. The saturation and height of the number of crimes increases throughout the day as shown by the regression lines which basically tries to best fit the date. We removed Times where there were 500 or more crimes since those make the line jump up more to make it fit less of the majority of Times throughout the day. 
+
+We can show how this line is made by doing some more code. 
+
+```{r linear model}
+model <- lm(Time ~ num_crimes, data = crimes_avg)
+model
+```
+
+so our beta_0 = 40172.49 and our beta_1 = 91.49. This makes sense because there are the most crimes when Time = 0 because that's at midnight. Also the way crimes are reported with this dataset, a lot seem to end up falling on this time. 
+
+Speaking of regression, another tool we can use to show predictions based on data is regression trees. They are essentially paths that you follow to see the average prediction based on what bucket our date is in. 
+
+```{r tree}
+crimes_hourly <- crimes %>%
+  group_by(hour) %>%
+  summarize(num_crimes = n()) 
+
+tree <- tree(num_crimes ~ hour, data = crimes_hourly)
+plot(tree)
+text(tree, pretty = 0, cex = 1)
+```
+
+This data is the same as the other graph, except this one is easier to read and shows it in a different way. As an example, if we want crime numbers between 8:00am and 12:00pm we go to the leaf that has 4052 crimes because it's between those two numbers. 
+
+#Curation of a Message or Messages Covering Insights Learned During the Tutorial
+
+One thing I want to look into just because my safety relies on this research is whether the three summer months (June, July, and August) are safer on average than the others. 
+
+```{r summer average}
+#averaging crime rates per month
+avgs <- crimes %>%
+  group_by(month) %>%
+  summarize(num_crimes = n()) 
+avgs
+#we can do some simple computations to compute average manually with these numbers
+#average summer crime numbers for Minneapolis
+summer_avg <- (13495 + 12317 + 13001) / 3
+summer_avg
+#average crime numbers for anything except summer for Minneapolis
+rest_avg <- (10165 + 8300 + 10320 +	10986 + 12700 + 11942 + 11903) / 7
+rest_avg
+
+#now let's reduce it to just looking at the University of Minnesota where I'll be living
+avgs_umn <- crimes %>%
+  filter(Neighborhood == "UNIVERSITY OF MINNESOTA") %>%
+  group_by(month) %>%
+  summarize(num_crimes = n()) 
+avgs_umn
+#average summer crime numbers for UMN
+summer_umn <- (57 + 54 + 66) / 3
+summer_umn
+#average crime numbers for anything except summer for UMN
+rest_umn <- (37 + 52 + 46 + 48 + 69 + 79 + 69) / 7
+rest_umn
+```
+
+This doesn't look good, nor is it what I was expecting. I didn't do my research on the city because I just wanted whatever internship I could get but firstly it definitely isn't any safer than the average for America. Also, the Summer months are specifically more dangerous for both the entire city and the campus. 
+
+Let's look at these numbers in terms of the populations of the city and campus though. 
+
+```{r summer average part 2}
+#all of these numbers for population from Google
+
+summer_rate = summer_avg / 413651
+summer_rate
+
+rest_rate = rest_avg / 413651
+rest_rate
+
+umnsummer_rate = summer_umn / 51147
+umnsummer_rate
+
+umnrest_rate = rest_umn / 51147
+umnrest_rate
+```
+
+#Conclusion
+
+I have learned two important things by my data science endeavors. Firstly, where I'll be living in the University of Minnesota area is much safer than the general city of Minneapolis relative to its population. This could change as population might drop significantly in the summer due to students moving away but I couldn't find data on that. Secondly, the campus is roughly just as safe as it is during the rest of the year in the summer which is good. 
+
+My graph earlier limited data to recent years so the graph would be more concise and succinct but using the data over the years shows that the data points to two things. Minneapolis matches the average crime rate in United States which means it's not overly safe or dangerous by our hypothesis testing and there is a similar crime count during the summer months.  
+
+#Further Reading\References:
+
+Data sets taken from: https://www.kaggle.com/mrisdal/minneapolis-incidents-crime
+Hypothesis/crime statistics from: http://www.nationmaster.com/country-info/stats/Crime/Total-crimes-per-1000
+Further reading and data on how safe Minneapolis-St. Paul, Minnesota is: https://realestate.usnews.com/places/minnesota/minneapolis-st-paul/crime
+Read more on linear regression and other statistical methods used: http://www-bcf.usc.edu/~gareth/ISL/
